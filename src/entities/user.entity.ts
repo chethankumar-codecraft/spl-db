@@ -25,4 +25,5 @@ export class User extends BaseEntity implements IUser {
         this.email = user.email;
     }
     
+    
 }

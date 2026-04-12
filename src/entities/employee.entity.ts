@@ -24,6 +24,4 @@ export class Employee extends BaseEntity implements IEmployee {
         this.department = employee.department;
         this.salary = employee.salary;
     }
-    
-
 }
