@@ -13,7 +13,15 @@ const newUser = new User({
   updatedBy: 1,
 });
 await newUser.save();
-
+const deleteAllUser = User.deleteAll({
+  conditions: { name: "John" },
+  limit: 1,
+});
+const findAllUser = User.findAll({
+  conditions: { name: "John" },
+  limit: 10,
+  offset: 20,
+});
 const foundUser = await User.findById(1);
 
 const newEmployee = new Employee({
@@ -28,7 +36,6 @@ const newEmployee = new Employee({
   updatedBy: 1,
 });
 await newEmployee.save();
-
 const foundEmployee = await Employee.findById(1);
 const foundAllEmployee = await Employee.findAll();
 const deleteEmployee = await Employee.deleteById(2);

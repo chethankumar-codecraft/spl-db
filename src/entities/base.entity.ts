@@ -33,7 +33,6 @@ export abstract class BaseEntity implements IBaseEntity {
     const keys = Object.keys(this).filter((k) => k !== "id") as (keyof this)[];
     const values = keys.map((k) => this[k]);
     const existing = await (this.constructor as any).findById(this.id);
-
     if (existing) {
       const keys = Object.keys(this).filter((k) => k !== "id");
       const setClause = keys.map((k) => `${k} = ?`).join(", ");
@@ -42,7 +41,7 @@ export abstract class BaseEntity implements IBaseEntity {
       await db.execute(query, [...values, this.id]);
     } else {
       const columns = keys.join(", ");
-      const placeholders = "?, ".repeat(keys.length).slice(0, -2);
+      const placeholders = "?, ".repeat(keys.length + 1).slice(0, -2);
       const query = `INSERT INTO ${(this.constructor as typeof BaseEntity).getTableName()} (id, ${columns}) VALUES (${placeholders})`;
       console.log(query);
       await db.execute(query, [this.id, ...values]);
@@ -62,14 +61,38 @@ export abstract class BaseEntity implements IBaseEntity {
   }
 
   // TASKS:
-  static async findAll<T extends BaseEntity, I extends IBaseEntity>(this: {
-    new (entity: I): T;
-    getTableName(): string;
-  }): Promise<T[]> {
-    const query = `SELECT * FROM ${this.getTableName()}`;
+  static async findAll<T extends BaseEntity, I extends IBaseEntity>(
+    this: {
+      new (entity: I): T;
+      getTableName(): string;
+    },
+    options?: {
+      conditions?: Partial<I>;
+      limit?: number;
+      offset?: number;
+    },
+  ): Promise<T[]> {
+    let query = `SELECT * FROM ${this.getTableName()}`;
+    const values = [];
+    // WHERE
+    if (options?.conditions && Object.keys(options.conditions).length > 0) {
+      const keys = Object.keys(options.conditions);
+      const whereClause = keys.map((k) => `${k} = ?`).join(" AND ");
+      query += ` WHERE ${whereClause}`;
+      values.push(...Object.values(options.conditions));
+    }
+    // PAGINATION
+    if (options?.limit !== undefined) {
+      query += ` LIMIT ?`;
+      values.push(options.limit);
+    }
+    if (options?.offset !== undefined) {
+      query += ` OFFSET ?`;
+      values.push(options.offset);
+    }
     console.log(query);
-    const result = await db.execute(query);
-    return result;
+    const result = await db.execute(query, values);
+    return result.map((row: I) => new this(row));
   }
   static async findOne<T extends BaseEntity, I extends IBaseEntity>(
     this: { new (entity: I): T; getTableName(): string },
@@ -89,18 +112,39 @@ export abstract class BaseEntity implements IBaseEntity {
   static async deleteById<T extends BaseEntity, I extends IBaseEntity>(
     this: { new (entity: I): T; getTableName(): string },
     id: number,
-  ): Promise<void> {
+  ): Promise<number> {
     const query = `DELETE FROM ${this.getTableName()} WHERE id = ?`;
     console.log(query);
-    await db.execute(query, [id]);
+    const result = await db.execute(query, [id]);
+    return result.affectedRows ?? 0;
   }
-  static async deleteAll<T extends BaseEntity, I extends IBaseEntity>(this: {
-    new (entity: I): T;
-    getTableName(): string;
-  }): Promise<void> {
-    const query = `DELETE FROM ${this.getTableName()}`;
+  static async deleteAll<T extends BaseEntity, I extends IBaseEntity>(
+    this: {
+      new (entity: I): T;
+      getTableName(): string;
+    },
+    options?: {
+      conditions?: Partial<I>;
+      limit?: number;
+    },
+  ): Promise<number> {
+    let query = `DELETE FROM ${this.getTableName()}`;
+    const values = [];
+    // WHERE
+    if (options?.conditions && Object.keys(options.conditions).length > 0) {
+      const keys = Object.keys(options.conditions);
+      const whereClause = keys.map((k) => `${k} = ?`).join(" AND ");
+      query += ` WHERE ${whereClause}`;
+      values.push(...Object.values(options.conditions));
+    }
+
+    if (options?.limit !== undefined) {
+      query += ` LIMIT ?`;
+      values.push(options.limit);
+    }
     console.log(query);
-    await db.execute(query);
+    const result = await db.execute(query, values);
+    return result.affectedRows ?? 0;
   }
   static async deleteOne<T extends BaseEntity, I extends IBaseEntity>(
     this: {
@@ -108,15 +152,16 @@ export abstract class BaseEntity implements IBaseEntity {
       getTableName(): string;
     },
     conditions: Partial<I>,
-  ): Promise<void> {
+  ): Promise<number> {
     const keys = Object.keys(conditions);
+    if (keys.length === 0) return 0;
 
     const whereCondition = keys.map((k) => `${k} = ?`).join(" AND ");
     const values = Object.values(conditions);
 
     const query = `DELETE FROM ${this.getTableName()} WHERE ${whereCondition} LIMIT 1`;
     console.log(query);
-
-    await db.execute(query, values);
+    const result = await db.execute(query, values);
+    return result.affectedRows ?? 0;
   }
 }
