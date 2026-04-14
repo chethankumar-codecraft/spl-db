@@ -1,17 +1,44 @@
 import type { IDatabaseDriver } from "../core/db.js";
-
+import postgres from "postgres";
 export class PostgreSqlDriver implements IDatabaseDriver {
-  connect(): Promise<void> {
-    console.log("[SIMULATING]: Connecting to MySQL database...");
-    return Promise.resolve();
+  private connection: ReturnType<typeof postgres> | null = null;
+  private connectionConfig: string | postgres.Options<{}>;
+
+  constructor(connectionConfig: string | postgres.Options<{}>) {
+    this.connectionConfig = connectionConfig;
   }
-  disconnect(): Promise<void> {
-    console.log("[SIMULATING]: Disconnecting from MySQL database...");
-    return Promise.resolve();
+
+  async connect(): Promise<void> {
+    if (this.connection) {
+      return;
+    }
+    this.connection =
+      typeof this.connectionConfig === "string"
+        ? postgres(this.connectionConfig)
+        : postgres(this.connectionConfig);
+    await this.connection`SELECT 1`;
   }
-  execute(query: string, params?: any[]): Promise<any> {
-    console.log("[SIMULATING]: Executing query...", query, params);
-    return Promise.resolve();
+
+  async disconnect(): Promise<void> {
+    if (!this.connection) {
+      return;
+    }
+
+    await this.connection.end();
+    this.connection = null;
+  }
+
+  async execute(query: string, params?: any[]): Promise<any> {
+    if (!this.connection) {
+      throw new Error("Not connected to database");
+    }
+
+    // postgres.js uses tagged templates OR unsafe for raw queries
+    if (params && params.length > 0) {
+      return await this.connection.unsafe(query, params);
+    }
+
+    return await this.connection.unsafe(query);
   }
 
   getPlaceholderPrefix(): string {
@@ -27,7 +54,6 @@ export class PostgreSqlDriver implements IDatabaseDriver {
       .filter((c) => c !== "id")
       .map((c) => `${c} = EXCLUDED.${c}`)
       .join(", ");
-
     return `
     INSERT INTO ${tableName} (${columns.join(", ")})
     VALUES (${placeholders})
@@ -87,15 +113,12 @@ export class PostgreSqlDriver implements IDatabaseDriver {
   ): string {
     let index = 1;
     let query = `SELECT ${columns.join(", ")} FROM ${tableName}`;
-
     if (conditions && Object.keys(conditions).length) {
       const where = Object.keys(conditions)
         .map((key) => `${key} = ${this.getNumberedPlaceholder(index++)}`)
         .join(" AND ");
-
       query += ` WHERE ${where}`;
     }
-
     if (limit !== undefined) {
       query += ` LIMIT ${this.getNumberedPlaceholder(index++)}`;
     }
@@ -108,13 +131,12 @@ export class PostgreSqlDriver implements IDatabaseDriver {
     tableName: string,
     conditions?: Record<string, unknown>,
   ): string {
-    let index=1;
+    let index = 1;
     let query = `SELECT COUNT(*) as count FROM ${tableName}`;
     if (conditions && Object.keys(conditions).length) {
       const where = Object.keys(conditions)
         .map((key) => `${key} = ${this.getNumberedPlaceholder(index++)}`)
         .join(" AND ");
-
       query += ` WHERE ${where}`;
     }
     return query;

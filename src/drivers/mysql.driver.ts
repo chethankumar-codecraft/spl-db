@@ -1,18 +1,41 @@
+import type { ConnectionOptions } from "mysql2";
 import type { IDatabaseDriver } from "../core/db.js";
-import type { IBaseEntity } from "../core/base.entity.js";
+import { createConnection, Connection } from "mysql2/promise";
+
 export class MySqlDriver implements IDatabaseDriver {
-  connect(): Promise<void> {
-    console.log("[SIMULATING]: Connecting to MySQL database...");
-    return Promise.resolve();
+  private connection: Connection | null = null;
+  private connectionConfig: string | ConnectionOptions;
+
+  constructor(connectionConfig: string | ConnectionOptions) {
+    this.connectionConfig = connectionConfig;
   }
-  disconnect(): Promise<void> {
-    console.log("[SIMULATING]: Disconnecting from MySQL database...");
-    return Promise.resolve();
+
+  async connect(): Promise<void> {
+    if (this.connection) {  
+      return;
+    }
+    this.connection = await (typeof this.connectionConfig === "string"
+      ? createConnection(this.connectionConfig)
+      : createConnection(this.connectionConfig));
+    await this.connection.query("SELECT 1");
   }
-  execute(query: string, params?: any[]): Promise<any> {
-    console.log("[SIMULATING]: Executing query...", query, params);
-    return Promise.resolve();
+
+  async disconnect(): Promise<void> {
+    if (!this.connection) {
+      return;
+    }
+    await this.connection.end();
+    this.connection = null;
   }
+
+  async execute(query: string, params?: any[]): Promise<any> {
+    if (!this.connection) {
+      throw new Error("Not connected to the database");
+    }
+    const [results] = await this.connection.execute(query, params);
+    return results;
+  }
+
   getPlaceholderPrefix(): string {
     return "?";
   }

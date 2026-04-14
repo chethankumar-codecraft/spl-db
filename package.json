@@ -17,6 +17,9 @@
     "typescript": "^6.0.2"
   },
   "dependencies": {
+    "mysql2": "^3.22.0",
+    "mysql2-promise": "^0.1.4",
+    "postgres": "^3.4.9",
     "reflect-metadata": "^0.2.2"
   }
 }

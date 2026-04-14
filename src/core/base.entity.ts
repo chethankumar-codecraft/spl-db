@@ -1,10 +1,6 @@
 import { DB } from "./db.js";
 import { TABLE_METADATA_KEY } from "./table.decorator.js";
-import {
-  Column,
-  COLUMNS_METADATA_KEY,
-  type ColumnMetadata,
-} from "./column.decorator.js";
+import { Column, getColumnSqlName } from "./column.decorator.js";
 
 export interface IBaseEntity {
   id?: number | undefined;
@@ -15,7 +11,7 @@ export interface IBaseEntity {
 }
 
 export abstract class BaseEntity implements IBaseEntity {
-  @Column('ID')
+  @Column("ID")
   id?: number | undefined;
   @Column()
   createdAt: Date;
@@ -38,24 +34,21 @@ export abstract class BaseEntity implements IBaseEntity {
     return Reflect.getMetadata(TABLE_METADATA_KEY, this);
   }
 
-  static getAllColumns(target: any): ColumnMetadata[] {
-    let columns: ColumnMetadata[] = [];
-    while (target && target !== Function.prototype) {
-      const current = Reflect.getMetadata(COLUMNS_METADATA_KEY, target) || [];
-      columns = [...columns, ...current];
-      target = Object.getPrototypeOf(target);
-    }
-    return columns;
-  }
-
   async save(): Promise<void> {
-    const metadata: ColumnMetadata[] = (this.constructor as any).getAllColumns(
-      this.constructor,
+    const ctor = this.constructor;
+    const proto = Object.getPrototypeOf(this) as object;
+    const keys = Object.keys(this);
+    console.log(keys);
+
+    const columnsMetadata = keys
+      .map((k) => getColumnSqlName(proto, k))
+      .filter((metadata) => metadata.dbColumnName);
+    const values = columnsMetadata.map(
+      (col) => (this as any)[col.propertyName],
     );
-    const columns = metadata.map((col: any) => col.columnName); // DB columns
-    const values = metadata.map((col: any) => (this as any)[col.propertyKey]); // object values
+    const columns = columnsMetadata.map((col) => col.dbColumnName);
     const query = DB.driver.getInsertQuery(
-      (this.constructor as typeof BaseEntity).getTableName(),
+      Reflect.getMetadata(TABLE_METADATA_KEY, ctor),
       columns,
     );
     await DB.driver.execute(query, values);
@@ -75,7 +68,7 @@ export abstract class BaseEntity implements IBaseEntity {
       getTableName(): string;
     },
     options?: {
-      conditions?: Partial<I>;
+      conditions?: Record<string, unknown>;
       limit?: number;
       offset?: number;
     },
@@ -102,11 +95,19 @@ export abstract class BaseEntity implements IBaseEntity {
       values.push(options.offset);
     }
     const result = await DB.driver.execute(query, values);
-    return result.map((row: any) => new this(row));
+    const metadata = (this as any).getAllColumns(this);
+
+    return result.map((row: any) => {
+      const mapped: any = {};
+      for (const col of metadata) {
+        mapped[col.propertyKey] = row[col.columnName];
+      }
+      return new this(mapped);
+    });
   }
   static async findOne<T extends BaseEntity, I extends IBaseEntity>(
     this: { new (entity: I): T; getTableName(): string },
-    conditions: Partial<I>,
+    conditions: Record<string, unknown>,
   ): Promise<T | null> {
     const results = await (this as any).findAll({
       conditions: conditions,
@@ -127,7 +128,7 @@ export abstract class BaseEntity implements IBaseEntity {
       getTableName(): string;
     },
     options?: {
-      conditions?: Partial<I>;
+      conditions?: Record<string, unknown>;
       limit?: number;
       offset?: number;
     },
@@ -158,7 +159,7 @@ export abstract class BaseEntity implements IBaseEntity {
 
   static async deleteOne<T extends BaseEntity, I extends IBaseEntity>(
     this: new (entity: I) => T,
-    conditions: Partial<I>,
+    conditions: Record<string, unknown>,
   ): Promise<boolean> {
     const affectedRows = await (this as any).deleteAll({
       conditions,
@@ -169,28 +170,59 @@ export abstract class BaseEntity implements IBaseEntity {
 
   static async count<T extends BaseEntity, I extends IBaseEntity>(
     this: { new (entity: I): T; getTableName(): string },
-    conditions?: Partial<I>,
+    conditions?: Record<string, unknown>,
   ): Promise<number> {
     const query = DB.driver.getCountQuery(this.getTableName(), conditions);
-    const result = await DB.driver.execute(query);
+    const values = [];
+
+    if (conditions) {
+      for (const key of Object.keys(conditions)) {
+        values.push((conditions as any)[key]);
+      }
+    }
+    const result = await DB.driver.execute(query, values);
     return result?.[0]?.count ?? 0;
   }
   static async updateAll<T extends BaseEntity, I extends IBaseEntity>(
     this: { new (entity: I): T; getTableName(): string },
-    updates: Partial<I>,
-    conditions: Partial<I>,
+    updates: Record<string, unknown>,
+    conditions: Record<string, unknown>,
   ): Promise<number> {
+    const metadata = (this as any).getAllColumns(this);
+
+    const updateKeys = Object.keys(updates);
+    const conditionKeys = Object.keys(conditions);
+
+    const updateColumns = metadata
+      .filter((col: any) => updateKeys.includes(col.propertyKey))
+      .map((col: any) => col.columnName);
+
+    const conditionColumns = metadata
+      .filter((col: any) => conditionKeys.includes(col.propertyKey))
+      .reduce((acc: any, col: any) => {
+        acc[col.columnName] = (conditions as any)[col.propertyKey];
+        return acc;
+      }, {});
+
     const query = DB.driver.getUpdateQuery(
       this.getTableName(),
-      Object.keys(updates),
-      conditions,
+      updateColumns,
+      conditionColumns,
     );
+
+    // build params in same order
     const params = [];
-    for (const key of Object.keys(updates)) {
-      params.push((updates as any)[key]);
+    // updates
+    for (const col of metadata) {
+      if (updateKeys.includes(col.propertyKey)) {
+        params.push((updates as any)[col.propertyKey]);
+      }
     }
-    for (const key of Object.keys(conditions)) {
-      params.push((conditions as any)[key]);
+    // conditions
+    for (const col of metadata) {
+      if (conditionKeys.includes(col.propertyKey)) {
+        params.push((conditions as any)[col.propertyKey]);
+      }
     }
     const result = await DB.driver.execute(query, params);
     return result.affectedRows;
@@ -198,7 +230,7 @@ export abstract class BaseEntity implements IBaseEntity {
   static async updateById<T extends BaseEntity, I extends IBaseEntity>(
     this: new (entity: I) => T,
     id: number,
-    updates: Partial<I>,
+    updates: Record<string, unknown>,
   ): Promise<boolean> {
     const affectedRows = await (this as any).updateAll(updates, { id });
     return affectedRows > 0;

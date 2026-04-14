@@ -1,21 +1,32 @@
-export const COLUMNS_METADATA_KEY = Symbol("columns");
+import "reflect-metadata";
 
-//key and custom name
-export interface ColumnMetadata {
-  propertyKey: string;
-  columnName: string;
+export const COLUMN_METADATA_KEY = Symbol("column");
+
+export interface ColumnOptions {
+    name?: string;
 }
 
-export function Column(columnName?: string) {
-  return function (target: any, propertyKey: string) {
-    const existing: ColumnMetadata[] =
-      Reflect.getMetadata(COLUMNS_METADATA_KEY, target.constructor) || [];
-    if (!existing.some((col) => col.propertyKey === propertyKey)) {
-      existing.push({
-        propertyKey,
-        columnName: columnName || propertyKey,
-      });
+function normalizeOptions(options?: string | ColumnOptions): ColumnOptions {
+    if (options === undefined) {
+        return {};
     }
-    Reflect.defineMetadata(COLUMNS_METADATA_KEY, existing, target.constructor);
-  };
+    if (typeof options === "string") {
+        return { name: options };
+    }
+    return options;
+}
+
+export function Column(options?: string | ColumnOptions) {
+    const resolved = normalizeOptions(options);
+    return function (target: object, propertyKey: string | symbol): void {
+        Reflect.defineMetadata(COLUMN_METADATA_KEY, resolved, target, propertyKey);
+    };
+}
+
+export function getColumnSqlName(prototype: object, propertyKey: string): { dbColumnName: string, propertyName: string } {
+    const meta = Reflect.getMetadata(COLUMN_METADATA_KEY, prototype, propertyKey) as
+        | ColumnOptions
+        | undefined;
+
+    return { dbColumnName: meta ? meta.name ?? propertyKey : '', propertyName: propertyKey };
 }

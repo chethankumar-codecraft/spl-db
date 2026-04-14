@@ -1,6 +1,6 @@
 import { BaseEntity, type IBaseEntity } from "../core/base.entity.js";
 import { Column } from "../core/column.decorator.js";
-import { Table, TABLE_METADATA_KEY } from "../core/table.decorator.js";
+import { Table } from "../core/table.decorator.js";
 
 export interface IUser extends IBaseEntity {
   name: string;
@@ -11,7 +11,7 @@ export interface IUser extends IBaseEntity {
 
 @Table("users")
 export class User extends BaseEntity implements IUser {
-  @Column()
+  @Column("Name")
   name: string;
   @Column()
   address: string;
