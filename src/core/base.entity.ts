@@ -11,15 +11,15 @@ export interface IBaseEntity {
 }
 
 export abstract class BaseEntity implements IBaseEntity {
-  @Column("ID")
+  @Column()
   id?: number | undefined;
-  @Column()
+  @Column("created_at")
   createdAt: Date;
-  @Column()
+  @Column("created_by")
   createdBy: number;
-  @Column()
+  @Column("updated_at")
   updatedAt: Date;
-  @Column()
+  @Column("updated_by")
   updatedBy: number;
 
   constructor(entity: IBaseEntity) {
@@ -33,16 +33,39 @@ export abstract class BaseEntity implements IBaseEntity {
   static getTableName(): string {
     return Reflect.getMetadata(TABLE_METADATA_KEY, this);
   }
+  static buildDbConditions<T extends BaseEntity, I extends IBaseEntity>(
+    this: new (entity: I) => T,
+    conditions?: Record<string, unknown>,
+  ): { dbConditions: Record<string, unknown>; values: unknown[] } {
+    const dbConditions: Record<string, unknown> = {};
+    const values: unknown[] = [];
+    const proto = this.prototype as object;
+    const entries = Object.entries(conditions || {});
+    for (const [key, value] of entries) {
+      const meta = getColumnSqlName(proto, key);
+      if (!meta.dbColumnName) {
+        throw new Error(`Unknown column: ${key}`);
+      }
+      dbConditions[meta.dbColumnName] = value;
+      values.push(value);
+    }
+
+    return { dbConditions: dbConditions, values: values };
+  }
 
   async save(): Promise<void> {
     const ctor = this.constructor;
     const proto = Object.getPrototypeOf(this) as object;
     const keys = Object.keys(this);
-    console.log(keys);
 
     const columnsMetadata = keys
       .map((k) => getColumnSqlName(proto, k))
-      .filter((metadata) => metadata.dbColumnName);
+      .filter(
+        (metadata) =>
+          metadata.dbColumnName &&
+          metadata.propertyName !== "id" &&
+          (this as any)[metadata.propertyName] !== undefined,
+      );
     const values = columnsMetadata.map(
       (col) => (this as any)[col.propertyName],
     );
@@ -51,6 +74,7 @@ export abstract class BaseEntity implements IBaseEntity {
       Reflect.getMetadata(TABLE_METADATA_KEY, ctor),
       columns,
     );
+    console.log(query);
     await DB.driver.execute(query, values);
   }
 
@@ -66,6 +90,10 @@ export abstract class BaseEntity implements IBaseEntity {
     this: {
       new (entity: I): T;
       getTableName(): string;
+      buildDbConditions(conditions?: Record<string, unknown>): {
+        dbConditions: Record<string, unknown>;
+        values: unknown[];
+      };
     },
     options?: {
       conditions?: Record<string, unknown>;
@@ -73,37 +101,25 @@ export abstract class BaseEntity implements IBaseEntity {
       offset?: number;
     },
   ): Promise<T[]> {
+    const { dbConditions, values } = this.buildDbConditions(
+      options?.conditions,
+    );
     const query = DB.driver.getSelectQuery(
       this.getTableName(),
       ["*"],
-      options?.conditions,
+      dbConditions,
       options?.limit,
       options?.offset,
     );
-    const values = [];
-    if (options?.conditions) {
-      for (const key of Object.keys(options.conditions!)) {
-        values.push((options.conditions as any)[key]);
-      }
-    }
-
     if (options?.limit !== undefined) {
       values.push(options.limit);
     }
-
     if (options?.offset !== undefined) {
       values.push(options.offset);
     }
+    console.log(query);
     const result = await DB.driver.execute(query, values);
-    const metadata = (this as any).getAllColumns(this);
-
-    return result.map((row: any) => {
-      const mapped: any = {};
-      for (const col of metadata) {
-        mapped[col.propertyKey] = row[col.columnName];
-      }
-      return new this(mapped);
-    });
+    return result;
   }
   static async findOne<T extends BaseEntity, I extends IBaseEntity>(
     this: { new (entity: I): T; getTableName(): string },
@@ -126,6 +142,10 @@ export abstract class BaseEntity implements IBaseEntity {
     this: {
       new (entity: I): T;
       getTableName(): string;
+      buildDbConditions(conditions?: Record<string, unknown>): {
+        dbConditions: Record<string, unknown>;
+        values: unknown[];
+      };
     },
     options?: {
       conditions?: Record<string, unknown>;
@@ -133,19 +153,9 @@ export abstract class BaseEntity implements IBaseEntity {
       offset?: number;
     },
   ): Promise<number> {
-    const query = DB.driver.getDeleteQuery(
-      this.getTableName(),
+    const { dbConditions, values } = this.buildDbConditions(
       options?.conditions,
-      options?.limit,
-      options?.offset,
     );
-    const values = [];
-    if (options?.conditions) {
-      for (const key of Object.keys(options.conditions!)) {
-        values.push((options.conditions as any)[key]);
-      }
-    }
-
     if (options?.limit !== undefined) {
       values.push(options.limit);
     }
@@ -153,8 +163,15 @@ export abstract class BaseEntity implements IBaseEntity {
     if (options?.offset !== undefined) {
       values.push(options.offset);
     }
+    const query = DB.driver.getDeleteQuery(
+      this.getTableName(),
+      dbConditions,
+      options?.limit,
+      options?.offset,
+    );
+    console.log(query);
     const result = await DB.driver.execute(query, values);
-    return result.affectedRows;
+    return result.affectedRows ?? result.count;
   }
 
   static async deleteOne<T extends BaseEntity, I extends IBaseEntity>(
@@ -169,63 +186,59 @@ export abstract class BaseEntity implements IBaseEntity {
   }
 
   static async count<T extends BaseEntity, I extends IBaseEntity>(
-    this: { new (entity: I): T; getTableName(): string },
+    this: {
+      new (entity: I): T;
+      getTableName(): string;
+      buildDbConditions(conditions?: Record<string, unknown>): {
+        dbConditions: Record<string, unknown>;
+        values: unknown[];
+      };
+    },
     conditions?: Record<string, unknown>,
   ): Promise<number> {
-    const query = DB.driver.getCountQuery(this.getTableName(), conditions);
-    const values = [];
+    const { dbConditions, values } = this.buildDbConditions(conditions);
+    const query = DB.driver.getCountQuery(this.getTableName(), dbConditions);
 
-    if (conditions) {
-      for (const key of Object.keys(conditions)) {
-        values.push((conditions as any)[key]);
-      }
-    }
     const result = await DB.driver.execute(query, values);
     return result?.[0]?.count ?? 0;
   }
   static async updateAll<T extends BaseEntity, I extends IBaseEntity>(
-    this: { new (entity: I): T; getTableName(): string },
+    this: {
+      new (entity: I): T;
+      getTableName(): string;
+      buildDbConditions(conditions?: Record<string, unknown>): {
+        dbConditions: Record<string, unknown>;
+        values: unknown[];
+      };
+    },
     updates: Record<string, unknown>,
     conditions: Record<string, unknown>,
   ): Promise<number> {
-    const metadata = (this as any).getAllColumns(this);
+    const proto = this.prototype as object;
+    const dbUpdatesColumns: string[] = [];
+    const updateEntries = Object.entries(updates || {});
+    const { dbConditions, values } = this.buildDbConditions(conditions);
 
-    const updateKeys = Object.keys(updates);
-    const conditionKeys = Object.keys(conditions);
-
-    const updateColumns = metadata
-      .filter((col: any) => updateKeys.includes(col.propertyKey))
-      .map((col: any) => col.columnName);
-
-    const conditionColumns = metadata
-      .filter((col: any) => conditionKeys.includes(col.propertyKey))
-      .reduce((acc: any, col: any) => {
-        acc[col.columnName] = (conditions as any)[col.propertyKey];
-        return acc;
-      }, {});
+    const updateValues = [];
+    //updates
+    for (const [key, value] of updateEntries) {
+      const meta = getColumnSqlName(proto, key);
+      if (!meta.dbColumnName) {
+        throw new Error(`Unknown column: ${key}`);
+      }
+      dbUpdatesColumns.push(meta.dbColumnName);
+      updateValues.push(value);
+    }
+    const params = [...updateValues, ...values];
 
     const query = DB.driver.getUpdateQuery(
       this.getTableName(),
-      updateColumns,
-      conditionColumns,
+      dbUpdatesColumns,
+      dbConditions,
     );
-
-    // build params in same order
-    const params = [];
-    // updates
-    for (const col of metadata) {
-      if (updateKeys.includes(col.propertyKey)) {
-        params.push((updates as any)[col.propertyKey]);
-      }
-    }
-    // conditions
-    for (const col of metadata) {
-      if (conditionKeys.includes(col.propertyKey)) {
-        params.push((conditions as any)[col.propertyKey]);
-      }
-    }
+    console.log(query);
     const result = await DB.driver.execute(query, params);
-    return result.affectedRows;
+    return result.affectedRows ?? result.count;
   }
   static async updateById<T extends BaseEntity, I extends IBaseEntity>(
     this: new (entity: I) => T,

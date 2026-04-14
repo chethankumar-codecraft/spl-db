@@ -11,7 +11,7 @@ export interface IUser extends IBaseEntity {
 
 @Table("users")
 export class User extends BaseEntity implements IUser {
-  @Column("Name")
+  @Column()
   name: string;
   @Column()
   address: string;

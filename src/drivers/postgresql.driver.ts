@@ -33,7 +33,6 @@ export class PostgreSqlDriver implements IDatabaseDriver {
       throw new Error("Not connected to database");
     }
 
-    // postgres.js uses tagged templates OR unsafe for raw queries
     if (params && params.length > 0) {
       return await this.connection.unsafe(query, params);
     }
@@ -88,21 +87,31 @@ export class PostgreSqlDriver implements IDatabaseDriver {
     offset?: number,
   ): string {
     let index = 1;
-    let query = `DELETE FROM ${tableName}`;
+
+    let innerQuery = `SELECT id FROM ${tableName}`;
 
     if (conditions && Object.keys(conditions).length) {
       const where = Object.keys(conditions)
         .map((key) => `${key} = ${this.getNumberedPlaceholder(index++)}`)
         .join(" AND ");
-      query += ` WHERE ${where}`;
+
+      innerQuery += ` WHERE ${where}`;
     }
+
+    innerQuery += ` ORDER BY id`;
+
     if (limit !== undefined) {
-      query += ` LIMIT ${this.getNumberedPlaceholder(index++)}`;
+      innerQuery += ` LIMIT ${this.getNumberedPlaceholder(index++)}`;
     }
+
     if (offset !== undefined) {
-      query += ` OFFSET ${this.getNumberedPlaceholder(index++)}`;
+      innerQuery += ` OFFSET ${this.getNumberedPlaceholder(index++)}`;
     }
-    return query;
+
+    return `
+    DELETE FROM ${tableName}
+    WHERE id IN (${innerQuery})
+  `;
   }
   getSelectQuery(
     tableName: string,
