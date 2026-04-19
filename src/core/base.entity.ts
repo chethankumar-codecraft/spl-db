@@ -1,4 +1,4 @@
-import { DB } from "./db.js";
+import { DB, type DatabaseDriverResult } from "./db.js";
 import { TABLE_METADATA_KEY } from "./table.decorator.js";
 import { Column, getColumnSqlName } from "./column.decorator.js";
 
@@ -49,7 +49,6 @@ export abstract class BaseEntity implements IBaseEntity {
       dbConditions[meta.dbColumnName] = value;
       values.push(value);
     }
-
     return { dbConditions: dbConditions, values: values };
   }
 
@@ -62,9 +61,7 @@ export abstract class BaseEntity implements IBaseEntity {
       .map((k) => getColumnSqlName(proto, k))
       .filter(
         (metadata) =>
-          metadata.dbColumnName &&
-          metadata.propertyName !== "id" &&
-          (this as any)[metadata.propertyName] !== undefined,
+          metadata.dbColumnName 
       );
     const values = columnsMetadata.map(
       (col) => (this as any)[col.propertyName],
@@ -111,12 +108,6 @@ export abstract class BaseEntity implements IBaseEntity {
       options?.limit,
       options?.offset,
     );
-    if (options?.limit !== undefined) {
-      values.push(options.limit);
-    }
-    if (options?.offset !== undefined) {
-      values.push(options.offset);
-    }
     console.log(query);
     const result = await DB.driver.execute(query, values);
     return result;
@@ -135,7 +126,7 @@ export abstract class BaseEntity implements IBaseEntity {
   static async deleteById<T extends BaseEntity, I extends IBaseEntity>(
     this: new (entity: I) => T,
     id: number,
-  ): Promise<number> {
+  ): Promise<boolean> {
     return await (this as any).deleteOne({ id });
   }
   static async deleteAll<T extends BaseEntity, I extends IBaseEntity>(
@@ -156,13 +147,6 @@ export abstract class BaseEntity implements IBaseEntity {
     const { dbConditions, values } = this.buildDbConditions(
       options?.conditions,
     );
-    if (options?.limit !== undefined) {
-      values.push(options.limit);
-    }
-
-    if (options?.offset !== undefined) {
-      values.push(options.offset);
-    }
     const query = DB.driver.getDeleteQuery(
       this.getTableName(),
       dbConditions,
@@ -171,7 +155,7 @@ export abstract class BaseEntity implements IBaseEntity {
     );
     console.log(query);
     const result = await DB.driver.execute(query, values);
-    return result.affectedRows ?? result.count;
+    return result.affectedRows; //affectedRows in mysql & count in postgresql
   }
 
   static async deleteOne<T extends BaseEntity, I extends IBaseEntity>(
@@ -200,7 +184,7 @@ export abstract class BaseEntity implements IBaseEntity {
     const query = DB.driver.getCountQuery(this.getTableName(), dbConditions);
 
     const result = await DB.driver.execute(query, values);
-    return result?.[0]?.count ?? 0;
+    return Number(result.rows[0]?.count ?? 0);
   }
   static async updateAll<T extends BaseEntity, I extends IBaseEntity>(
     this: {
@@ -238,7 +222,7 @@ export abstract class BaseEntity implements IBaseEntity {
     );
     console.log(query);
     const result = await DB.driver.execute(query, params);
-    return result.affectedRows ?? result.count;
+    return result.affectedRows;
   }
   static async updateById<T extends BaseEntity, I extends IBaseEntity>(
     this: new (entity: I) => T,

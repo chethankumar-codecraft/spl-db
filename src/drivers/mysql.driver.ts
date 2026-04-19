@@ -11,7 +11,7 @@ export class MySqlDriver implements IDatabaseDriver {
   }
 
   async connect(): Promise<void> {
-    if (this.connection) {  
+    if (this.connection) {
       return;
     }
     this.connection = await (typeof this.connectionConfig === "string"
@@ -39,6 +39,7 @@ export class MySqlDriver implements IDatabaseDriver {
   getPlaceholderPrefix(): string {
     return "?";
   }
+
   getInsertQuery(tableName: string, columns: string[]): string {
     const placeholders = columns
       .map(() => this.getPlaceholderPrefix())
@@ -51,29 +52,39 @@ export class MySqlDriver implements IDatabaseDriver {
     columns: string[],
     conditions: Record<string, unknown>,
   ): string {
-    console.log(
-      "[SIMULATING]: Updating query...",
-      tableName,
-      columns,
-      conditions,
-    );
-    return "";
+    const setClause = columns.map((col) => `${col}=?`).join(", ");
+    let query = `UPDATE ${tableName} SET ${setClause}`;
+
+    if (conditions && Object.keys(conditions).length > 0) {
+      const whereClause = Object.keys(conditions)
+        .map((key) => `${key} = ?`)
+        .join(" AND ");
+      query += ` WHERE ${whereClause}`;
+    }
+
+    return query;
   }
+
   getDeleteQuery(
     tableName: string,
     conditions: Record<string, unknown>,
     limit?: number,
     offset?: number,
   ): string {
-    console.log(
-      "[SIMULATING]: Deleting query...",
-      tableName,
-      conditions,
-      limit,
-      offset,
-    );
-    return "";
+    let query = `DELETE FROM ${tableName}`;
+    if (conditions && Object.keys(conditions).length > 0) {
+      const whereClause = Object.keys(conditions)
+        .map((col) => `${col} = ?`)
+        .join(" AND ");
+      query += ` WHERE ${whereClause}`;
+    }
+    if (limit !== undefined) {
+      query += ` LIMIT ${limit}`;
+      if (offset !== undefined) query += ` OFFSET ${offset}`;
+    }
+    return query;
   }
+
   getSelectQuery(
     tableName: string,
     columns: string[],
@@ -81,21 +92,29 @@ export class MySqlDriver implements IDatabaseDriver {
     limit?: number,
     offset?: number,
   ): string {
-    console.log(
-      "[SIMULATING]: Selecting query...",
-      tableName,
-      columns,
-      conditions,
-      limit,
-      offset,
-    );
-    return "";
+    let query = `SELECT ${columns.join(", ")} FROM ${tableName}`;
+    if (conditions && Object.keys(conditions).length > 0) {
+      const whereClause = Object.keys(conditions)
+        .map((key) => `${key} = ?`)
+        .join(" AND ");
+      query += ` WHERE ${whereClause}`;
+    }
+    if (limit !== undefined) query += ` LIMIT ${limit}`;
+    if (offset !== undefined) query += ` OFFSET ${offset}`;
+    return query;
   }
+
   getCountQuery(
     tableName: string,
     conditions?: Record<string, unknown>,
   ): string {
-    console.log("[SIMULATING]: Counting query...", tableName, conditions);
-    return "";
+    let query = `SELECT COUNT(*) AS count FROM ${tableName}`;
+    if (conditions && Object.keys(conditions).length) {
+      const where = Object.keys(conditions)
+        .map((key) => `${key} = ?`)
+        .join(" AND ");
+      query += ` WHERE ${where}`;
+    }
+    return query;
   }
 }

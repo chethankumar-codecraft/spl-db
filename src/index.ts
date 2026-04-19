@@ -4,7 +4,16 @@ import { Employee } from "./entities/employee.entity.js";
 import { User } from "./entities/user.entity.js";
 import { PostgreSqlDriver } from "./drivers/postgresql.driver.js";
 
-// DB.setDriver(new MySqlDriver("")); // or new PostgreSqlDriver()
+// DB.setDriver(
+//   new MySqlDriver({
+//     host: "localhost",
+//     port: 3306,
+//     user: "user",
+//     password: "user_password",
+//     database: "orm_db",
+//   }),
+// );
+
 DB.setDriver(
   new PostgreSqlDriver("postgres://user:user_password@localhost:5432/orm_db"),
 );

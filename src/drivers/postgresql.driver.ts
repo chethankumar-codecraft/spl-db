@@ -1,51 +1,72 @@
 import type { IDatabaseDriver } from "../core/db.js";
 import postgres from "postgres";
+import type { DatabaseDriverResult } from "../core/db.js";
+import type { ClientConfig } from "pg";
+import { Client } from "pg";
 export class PostgreSqlDriver implements IDatabaseDriver {
-  private connection: ReturnType<typeof postgres> | null = null;
-  private connectionConfig: string | postgres.Options<{}>;
+  private client: Client | null = null;
+  private connectionConfig: string | ClientConfig;
 
-  constructor(connectionConfig: string | postgres.Options<{}>) {
+  constructor(connectionConfig: string | ClientConfig) {
     this.connectionConfig = connectionConfig;
   }
 
   async connect(): Promise<void> {
-    if (this.connection) {
+    if (this.client) {
       return;
     }
-    this.connection =
+
+    this.client =
       typeof this.connectionConfig === "string"
-        ? postgres(this.connectionConfig)
-        : postgres(this.connectionConfig);
-    await this.connection`SELECT 1`;
+        ? new Client({ connectionString: this.connectionConfig })
+        : new Client(this.connectionConfig);
+
+    await this.client.connect();
+    await this.client.query("SELECT 1");
   }
 
   async disconnect(): Promise<void> {
-    if (!this.connection) {
+    if (!this.client) {
       return;
     }
 
-    await this.connection.end();
-    this.connection = null;
+    await this.client.end();
+    this.client = null;
   }
 
-  async execute(query: string, params?: any[]): Promise<any> {
-    if (!this.connection) {
-      throw new Error("Not connected to database");
+  async execute(
+    query: string,
+    params?: unknown[],
+  ): Promise<DatabaseDriverResult> {
+    if (!this.client) {
+      throw new Error("Not connected to the database");
     }
 
-    if (params && params.length > 0) {
-      return await this.connection.unsafe(query, params);
-    }
-
-    return await this.connection.unsafe(query);
+    const result = await this.client.query(query, params);
+    const rowId = result.rows[0]?.id;
+    const insertedId =
+      typeof rowId === "number"
+        ? rowId
+        : typeof rowId === "string" &&
+            rowId.trim() !== "" &&
+            !Number.isNaN(Number(rowId))
+          ? Number(rowId)
+          : undefined;
+    return {
+      rows: result.rows as Record<string, unknown>[],
+      affectedRows: result.rowCount ?? 0,
+      ...(insertedId !== undefined ? { insertedId } : {}),
+    };
   }
 
   getPlaceholderPrefix(): string {
     return "$";
   }
+
   getNumberedPlaceholder(index: number): string {
     return `${this.getPlaceholderPrefix()}${index}`;
   }
+
   getInsertQuery(tableName: string, columns: string[]): string {
     const placeholders = columns.map((_, i) => `$${i + 1}`).join(", ");
 
@@ -60,6 +81,7 @@ export class PostgreSqlDriver implements IDatabaseDriver {
     DO UPDATE SET ${updates}
   `;
   }
+
   getUpdateQuery(
     tableName: string,
     columns: string[],
@@ -80,6 +102,7 @@ export class PostgreSqlDriver implements IDatabaseDriver {
     }
     return query;
   }
+
   getDeleteQuery(
     tableName: string,
     conditions?: Record<string, unknown>,
@@ -97,22 +120,19 @@ export class PostgreSqlDriver implements IDatabaseDriver {
 
       innerQuery += ` WHERE ${where}`;
     }
-
     innerQuery += ` ORDER BY id`;
-
     if (limit !== undefined) {
-      innerQuery += ` LIMIT ${this.getNumberedPlaceholder(index++)}`;
+      innerQuery += ` LIMIT ${limit}`;
     }
-
     if (offset !== undefined) {
-      innerQuery += ` OFFSET ${this.getNumberedPlaceholder(index++)}`;
+      innerQuery += ` OFFSET ${offset}`;
     }
-
     return `
     DELETE FROM ${tableName}
     WHERE id IN (${innerQuery})
   `;
   }
+
   getSelectQuery(
     tableName: string,
     columns: string[],
@@ -129,19 +149,20 @@ export class PostgreSqlDriver implements IDatabaseDriver {
       query += ` WHERE ${where}`;
     }
     if (limit !== undefined) {
-      query += ` LIMIT ${this.getNumberedPlaceholder(index++)}`;
+      query += ` LIMIT ${limit}`;
     }
     if (offset !== undefined) {
-      query += ` OFFSET ${this.getNumberedPlaceholder(index++)}`;
+      query += ` OFFSET ${offset}`;
     }
     return query;
   }
+
   getCountQuery(
     tableName: string,
     conditions?: Record<string, unknown>,
   ): string {
     let index = 1;
-    let query = `SELECT COUNT(*) as count FROM ${tableName}`;
+    let query = `SELECT COUNT(*) AS count FROM ${tableName}`;
     if (conditions && Object.keys(conditions).length) {
       const where = Object.keys(conditions)
         .map((key) => `${key} = ${this.getNumberedPlaceholder(index++)}`)

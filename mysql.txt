@@ -1,0 +1,30 @@
+# table users
+CREATE TABLE users (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  address TEXT NOT NULL,
+  dob DATE NOT NULL,
+  email VARCHAR(255) NOT NULL UNIQUE,
+  created_at DATETIME NOT NULL,
+  created_by INT NOT NULL,
+  updated_at DATETIME NOT NULL,
+  updated_by INT NOT NULL
+);
+
+#table employee
+CREATE TABLE employees (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  position VARCHAR(255) NOT NULL,
+  department VARCHAR(255) NOT NULL,
+  salary DECIMAL(10,2) NOT NULL,
+  created_at DATETIME NOT NULL,
+  created_by INT NOT NULL,
+  updated_at DATETIME NOT NULL,
+  updated_by INT NOT NULL
+);
+
+
+//delete data
+TRUNCATE TABLE users;
+TRUNCATE TABLE employees;

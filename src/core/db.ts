@@ -1,7 +1,13 @@
+export interface DatabaseDriverResult {
+    rows: Record<string, unknown>[];
+    affectedRows: number;
+    insertedId?: number;
+}
+
 export interface IDatabaseDriver {
   connect(): Promise<void>;
   disconnect(): Promise<void>;
-  execute(query: string, params?: any[]): Promise<any>;
+  execute(query: string, params?: any[]): Promise<DatabaseDriverResult>;
 
   getPlaceholderPrefix(): string;
   getInsertQuery(tableName: string, columns: string[]): string;
