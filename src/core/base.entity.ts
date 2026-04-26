@@ -33,8 +33,9 @@ export abstract class BaseEntity implements IBaseEntity {
   static getTableName(): string {
     return Reflect.getMetadata(TABLE_METADATA_KEY, this);
   }
+
   static buildDbConditions<T extends BaseEntity, I extends IBaseEntity>(
-    this: new (entity: I) => T,
+    this: abstract new (entity: I) => T,
     conditions?: Record<string, unknown>,
   ): { dbConditions: Record<string, unknown>; values: unknown[] } {
     const dbConditions: Record<string, unknown> = {};
@@ -55,24 +56,45 @@ export abstract class BaseEntity implements IBaseEntity {
   async save(): Promise<void> {
     const ctor = this.constructor;
     const proto = Object.getPrototypeOf(this) as object;
-    const keys = Object.keys(this);
+    const tableName = Reflect.getMetadata(TABLE_METADATA_KEY, ctor) as string;
+    const propertyValues = Object.keys(this).reduce<Record<string, unknown>>(
+      (acc, key) => {
+        acc[key] = (this as any)[key];
+        return acc;
+      },
+      {},
+    );
+    const persistableValues = Object.entries(propertyValues).reduce<
+      Record<string, unknown>
+    >((acc, [key, value]) => {
+      if (value !== undefined) {
+        acc[key] = value;
+      }
+      return acc;
+    }, {});
+    const { dbConditions } = BaseEntity.buildDbConditions(persistableValues);
+    const columns = Object.keys(dbConditions);
+    if (columns.length === 0) {
+      throw new Error("Cannot save entity without any mapped columns");
+    }
 
-    const columnsMetadata = keys
-      .map((k) => getColumnSqlName(proto, k))
-      .filter(
-        (metadata) =>
-          metadata.dbColumnName 
-      );
-    const values = columnsMetadata.map(
-      (col) => (this as any)[col.propertyName],
+    const values = Object.values(dbConditions);
+    const query = DB.driver.getUpsertQuery(tableName, columns, ["id"]);
+    const result = await DB.driver.execute(query, values);
+    const resolvedId = BaseEntity.resolveNumericId(
+      result.insertedId ?? result.rows[0]?.id,
     );
-    const columns = columnsMetadata.map((col) => col.dbColumnName);
-    const query = DB.driver.getInsertQuery(
-      Reflect.getMetadata(TABLE_METADATA_KEY, ctor),
-      columns,
-    );
-    console.log(query);
-    await DB.driver.execute(query, values);
+    if (resolvedId !== undefined) {
+      this.id = resolvedId;
+    }
+
+    const returnedRow = result.rows[0];
+    if (returnedRow) {
+      this.hydrateFromRow(proto, returnedRow);
+      return;
+    }
+
+    await this.reloadCurrentState(tableName, proto);
   }
 
   static async findById<T extends BaseEntity, I extends IBaseEntity>(
@@ -110,7 +132,7 @@ export abstract class BaseEntity implements IBaseEntity {
     );
     console.log(query);
     const result = await DB.driver.execute(query, values);
-    return result;
+    return result.rows.map((row) => new this(row as I));
   }
   static async findOne<T extends BaseEntity, I extends IBaseEntity>(
     this: { new (entity: I): T; getTableName(): string },
@@ -231,5 +253,65 @@ export abstract class BaseEntity implements IBaseEntity {
   ): Promise<boolean> {
     const affectedRows = await (this as any).updateAll(updates, { id });
     return affectedRows > 0;
+  }
+  private async reloadCurrentState(
+    tableName: string,
+    prototype: object,
+  ): Promise<void> {
+    const entityId = BaseEntity.resolveNumericId(this.id);
+    if (entityId === undefined) {
+      throw new Error("Cannot reload entity after save without an id");
+    }
+
+    const query = DB.driver.getSelectQuery(
+      tableName,
+      ["*"],
+      { id: entityId },
+      1,
+    );
+    const result = await DB.driver.execute(query);
+    const row = result.rows[0];
+    if (!row) {
+      throw new Error(`Unable to reload entity with id ${entityId} after save`);
+    }
+
+    this.hydrateFromRow(prototype, row);
+  }
+
+  private static resolveNumericId(value: unknown): number | undefined {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+    if (
+      typeof value === "string" &&
+      value.trim() !== "" &&
+      !Number.isNaN(Number(value))
+    ) {
+      return Number(value);
+    }
+    return undefined;
+  }
+
+  private hydrateFromRow(
+    prototype: object,
+    row: Record<string, unknown>,
+  ): void {
+    const propertyToColumn = Object.keys(this).reduce<Record<string, string>>(
+      (acc, propertyName) => {
+        const metadata = getColumnSqlName(prototype, propertyName);
+        if (metadata.dbColumnName) {
+          acc[metadata.dbColumnName] = propertyName;
+        }
+        return acc;
+      },
+      {},
+    );
+
+    for (const [columnName, value] of Object.entries(row)) {
+      const propertyName = propertyToColumn[columnName] ?? columnName;
+      if (propertyName in this) {
+        (this as Record<string, unknown>)[propertyName] = value;
+      }
+    }
   }
 }

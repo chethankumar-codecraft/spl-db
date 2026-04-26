@@ -1,5 +1,5 @@
 import type { ConnectionOptions } from "mysql2";
-import type { IDatabaseDriver } from "../core/db.js";
+import type { IDatabaseDriver, DatabaseDriverResult } from "../core/db.js";
 import { createConnection, Connection } from "mysql2/promise";
 
 export class MySqlDriver implements IDatabaseDriver {
@@ -28,16 +28,50 @@ export class MySqlDriver implements IDatabaseDriver {
     this.connection = null;
   }
 
-  async execute(query: string, params?: any[]): Promise<any> {
+  async execute(
+    query: string,
+    params?: unknown[],
+  ): Promise<DatabaseDriverResult> {
     if (!this.connection) {
       throw new Error("Not connected to the database");
     }
-    const [results] = await this.connection.execute(query, params);
-    return results;
+    const [results] = await this.connection.execute(query, params as any);
+    if (Array.isArray(results)) {
+      return {
+        rows: results as Record<string, unknown>[],
+        affectedRows: 0,
+      };
+    }
+    if (results && typeof results === "object" && "affectedRows" in results) {
+      const maybeInsertId =
+        "insertId" in results ? results.insertId : undefined;
+      const insertedId =
+        typeof maybeInsertId === "number" && Number.isFinite(maybeInsertId)
+          ? maybeInsertId
+          : undefined;
+      return {
+        rows: [],
+        affectedRows: Number(results.affectedRows ?? 0),
+        ...(insertedId !== undefined ? { insertedId } : {}),
+      };
+    }
+    return {
+      rows: [],
+      affectedRows: 0,
+    };
   }
 
   getPlaceholderPrefix(): string {
     return "?";
+  }
+
+  private prepareWhereClause(conditions?: Record<string, unknown>): string {
+    if (!conditions || Object.keys(conditions).length === 0) {
+      return "";
+    }
+    const entries = Object.entries(conditions);
+    const predicates = entries.map(([column]) => `${column} = ?`);
+    return `${predicates.join(" AND ")}`;
   }
 
   getInsertQuery(tableName: string, columns: string[]): string {
@@ -47,21 +81,34 @@ export class MySqlDriver implements IDatabaseDriver {
     return `INSERT INTO ${tableName} (${columns.join(", ")}) VALUES (${placeholders})`;
   }
 
+  getUpsertQuery(
+    tableName: string,
+    columns: string[],
+    _conflictColumns: string[],
+  ): string {
+    const placeholders = columns
+      .map(() => this.getPlaceholderPrefix())
+      .join(", ");
+    const updateColumns = columns.filter((column) => column !== "id");
+    const updateAssignments = updateColumns.map(
+      (column) => `${column} = VALUES(${column})`,
+    );
+    updateAssignments.push("id = LAST_INSERT_ID(id)");
+    const updateClause = updateAssignments.join(", ");
+    return `INSERT INTO ${tableName} (${columns.join(", ")}) VALUES (${placeholders}) ON DUPLICATE KEY UPDATE ${updateClause}`;
+  }
+
   getUpdateQuery(
     tableName: string,
     columns: string[],
     conditions: Record<string, unknown>,
   ): string {
-    const setClause = columns.map((col) => `${col}=?`).join(", ");
+    const setClause = columns.map((col) => `${col} = ?`).join(", ");
     let query = `UPDATE ${tableName} SET ${setClause}`;
-
-    if (conditions && Object.keys(conditions).length > 0) {
-      const whereClause = Object.keys(conditions)
-        .map((key) => `${key} = ?`)
-        .join(" AND ");
+    const whereClause = this.prepareWhereClause(conditions);
+    if (whereClause) {
       query += ` WHERE ${whereClause}`;
     }
-
     return query;
   }
 
@@ -72,10 +119,8 @@ export class MySqlDriver implements IDatabaseDriver {
     offset?: number,
   ): string {
     let query = `DELETE FROM ${tableName}`;
-    if (conditions && Object.keys(conditions).length > 0) {
-      const whereClause = Object.keys(conditions)
-        .map((col) => `${col} = ?`)
-        .join(" AND ");
+    const whereClause = this.prepareWhereClause(conditions);
+    if (whereClause) {
       query += ` WHERE ${whereClause}`;
     }
     if (limit !== undefined) {
@@ -93,10 +138,8 @@ export class MySqlDriver implements IDatabaseDriver {
     offset?: number,
   ): string {
     let query = `SELECT ${columns.join(", ")} FROM ${tableName}`;
-    if (conditions && Object.keys(conditions).length > 0) {
-      const whereClause = Object.keys(conditions)
-        .map((key) => `${key} = ?`)
-        .join(" AND ");
+    const whereClause = this.prepareWhereClause(conditions);
+    if (whereClause) {
       query += ` WHERE ${whereClause}`;
     }
     if (limit !== undefined) query += ` LIMIT ${limit}`;
@@ -109,11 +152,9 @@ export class MySqlDriver implements IDatabaseDriver {
     conditions?: Record<string, unknown>,
   ): string {
     let query = `SELECT COUNT(*) AS count FROM ${tableName}`;
-    if (conditions && Object.keys(conditions).length) {
-      const where = Object.keys(conditions)
-        .map((key) => `${key} = ?`)
-        .join(" AND ");
-      query += ` WHERE ${where}`;
+    const whereClause = this.prepareWhereClause(conditions);
+    if (whereClause) {
+      query += ` WHERE ${whereClause}`;
     }
     return query;
   }
