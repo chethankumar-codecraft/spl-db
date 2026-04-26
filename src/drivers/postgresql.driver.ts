@@ -1,8 +1,8 @@
 import type { IDatabaseDriver } from "../core/db.js";
-import postgres from "postgres";
 import type { DatabaseDriverResult } from "../core/db.js";
 import type { ClientConfig } from "pg";
 import { Client } from "pg";
+
 export class PostgreSqlDriver implements IDatabaseDriver {
   private client: Client | null = null;
   private connectionConfig: string | ClientConfig;
@@ -15,12 +15,10 @@ export class PostgreSqlDriver implements IDatabaseDriver {
     if (this.client) {
       return;
     }
-
     this.client =
       typeof this.connectionConfig === "string"
         ? new Client({ connectionString: this.connectionConfig })
         : new Client(this.connectionConfig);
-
     await this.client.connect();
     await this.client.query("SELECT 1");
   }
@@ -29,7 +27,6 @@ export class PostgreSqlDriver implements IDatabaseDriver {
     if (!this.client) {
       return;
     }
-
     await this.client.end();
     this.client = null;
   }
@@ -41,7 +38,6 @@ export class PostgreSqlDriver implements IDatabaseDriver {
     if (!this.client) {
       throw new Error("Not connected to the database");
     }
-
     const result = await this.client.query(query, params);
     const rowId = result.rows[0]?.id;
     const insertedId =
@@ -67,19 +63,66 @@ export class PostgreSqlDriver implements IDatabaseDriver {
     return `${this.getPlaceholderPrefix()}${index}`;
   }
 
+  prepareWhereClause(
+    conditions?: Record<string, unknown>,
+    startIndex: number = 1,
+  ): { clause: string; nextIndex: number } {
+    if (!conditions || Object.keys(conditions).length === 0) {
+      return {
+        clause: "",
+        nextIndex: startIndex,
+      };
+    }
+    const whereClause = Object.keys(conditions)
+      .map((key) => `${key} = ${this.getNumberedPlaceholder(startIndex++)}`)
+      .join(" AND ");
+    return {
+      clause: whereClause,
+      nextIndex: startIndex,
+    };
+  }
+
+  prepareSetClause(
+    columns: string[],
+    startIndex: number = 1,
+  ): { clause: string; nextIndex: number } {
+    if (!columns.length) {
+      return {
+        clause: "",
+        nextIndex: startIndex,
+      };
+    }
+    const setClause = columns
+      .map((col) => `${col} = ${this.getNumberedPlaceholder(startIndex++)}`)
+      .join(", ");
+    return {
+      clause: setClause,
+      nextIndex: startIndex,
+    };
+  }
+
   getInsertQuery(tableName: string, columns: string[]): string {
     const placeholders = columns.map((_, i) => `$${i + 1}`).join(", ");
+    return `INSERT INTO ${tableName} (${columns.join(", ")}) VALUES (${placeholders}) RETURNING id`;
+  }
 
-    const updates = columns
-      .filter((c) => c !== "id")
-      .map((c) => `${c} = EXCLUDED.${c}`)
+  getUpsertQuery(
+    tableName: string,
+    columns: string[],
+    conflictColumns: string[],
+  ): string {
+    const placeholders = columns
+      .map((_, index) => this.getNumberedPlaceholder(index + 1))
       .join(", ");
-    return `
-    INSERT INTO ${tableName} (${columns.join(", ")})
-    VALUES (${placeholders})
-    ON CONFLICT (id)
-    DO UPDATE SET ${updates}
-  `;
+    const updateColumns = columns.filter(
+      (column) => !conflictColumns.includes(column),
+    );
+    const conflictClause = conflictColumns.join(", ");
+    const updateClause =
+      updateColumns.length > 0
+        ? `DO UPDATE SET ${updateColumns.map((column) => `${column} = EXCLUDED.${column}`).join(", ")}`
+        : "DO NOTHING"; //EXCLUDE: new insert values that failed because of conflict so it not give error
+    return `INSERT INTO ${tableName} (${columns.join(", ")}) VALUES (${placeholders}) ON CONFLICT (${conflictClause}) ${updateClause} RETURNING *`;
   }
 
   getUpdateQuery(
@@ -87,20 +130,12 @@ export class PostgreSqlDriver implements IDatabaseDriver {
     columns: string[],
     conditions: Record<string, unknown>,
   ): string {
-    let index = 1;
-    const setClause = columns
-      .map((col) => `${col} = ${this.getNumberedPlaceholder(index++)}`)
-      .join(", ");
-    let query = `UPDATE ${tableName} SET ${setClause}`;
-
-    if (conditions && Object.keys(conditions).length) {
-      const whereClause = Object.keys(conditions)
-        .map((key) => `${key} = ${this.getNumberedPlaceholder(index++)}`)
-        .join(" AND ");
-
-      query += ` WHERE ${whereClause}`;
-    }
-    return query;
+    const setClause = this.prepareSetClause(columns, 1);
+    const whereClause = this.prepareWhereClause(
+      conditions,
+      setClause.nextIndex,
+    );
+    return `UPDATE ${tableName} SET ${setClause.clause} WHERE ${whereClause.clause}`;
   }
 
   getDeleteQuery(
@@ -109,16 +144,10 @@ export class PostgreSqlDriver implements IDatabaseDriver {
     limit?: number,
     offset?: number,
   ): string {
-    let index = 1;
-
+    const whereClause = this.prepareWhereClause(conditions, 1);
     let innerQuery = `SELECT id FROM ${tableName}`;
-
-    if (conditions && Object.keys(conditions).length) {
-      const where = Object.keys(conditions)
-        .map((key) => `${key} = ${this.getNumberedPlaceholder(index++)}`)
-        .join(" AND ");
-
-      innerQuery += ` WHERE ${where}`;
+    if (whereClause.clause) {
+      innerQuery += ` WHERE ${whereClause.clause}`;
     }
     innerQuery += ` ORDER BY id`;
     if (limit !== undefined) {
@@ -140,13 +169,10 @@ export class PostgreSqlDriver implements IDatabaseDriver {
     limit?: number,
     offset?: number,
   ): string {
-    let index = 1;
+    const whereClause = this.prepareWhereClause(conditions, 1);
     let query = `SELECT ${columns.join(", ")} FROM ${tableName}`;
-    if (conditions && Object.keys(conditions).length) {
-      const where = Object.keys(conditions)
-        .map((key) => `${key} = ${this.getNumberedPlaceholder(index++)}`)
-        .join(" AND ");
-      query += ` WHERE ${where}`;
+    if (whereClause.clause) {
+      query += ` WHERE ${whereClause.clause}`;
     }
     if (limit !== undefined) {
       query += ` LIMIT ${limit}`;
@@ -161,13 +187,10 @@ export class PostgreSqlDriver implements IDatabaseDriver {
     tableName: string,
     conditions?: Record<string, unknown>,
   ): string {
-    let index = 1;
+    const whereClause = this.prepareWhereClause(conditions, 1);
     let query = `SELECT COUNT(*) AS count FROM ${tableName}`;
-    if (conditions && Object.keys(conditions).length) {
-      const where = Object.keys(conditions)
-        .map((key) => `${key} = ${this.getNumberedPlaceholder(index++)}`)
-        .join(" AND ");
-      query += ` WHERE ${where}`;
+    if (whereClause.clause) {
+      query += ` WHERE ${whereClause.clause}`;
     }
     return query;
   }
