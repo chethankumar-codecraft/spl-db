@@ -65,12 +65,18 @@ export class MySqlDriver implements IDatabaseDriver {
     return "?";
   }
 
+  escapeName(name: string): string {
+    return `\`${name.replace(/`/g, "``")}\``;
+  }
+
   private prepareWhereClause(conditions?: Record<string, unknown>): string {
     if (!conditions || Object.keys(conditions).length === 0) {
       return "";
     }
     const entries = Object.entries(conditions);
-    const predicates = entries.map(([column]) => `${column} = ?`);
+    const predicates = entries.map(
+      ([column]) => `${this.escapeName(column)} = ?`,
+    );
     return `${predicates.join(" AND ")}`;
   }
 
@@ -78,7 +84,7 @@ export class MySqlDriver implements IDatabaseDriver {
     const placeholders = columns
       .map(() => this.getPlaceholderPrefix())
       .join(", ");
-    return `INSERT INTO ${tableName} (${columns.join(", ")}) VALUES (${placeholders})`;
+    return `INSERT INTO ${this.escapeName(tableName)} (${columns.map((col) => this.escapeName(col)).join(", ")}) VALUES (${placeholders})`;
   }
 
   getUpsertQuery(
@@ -91,11 +97,14 @@ export class MySqlDriver implements IDatabaseDriver {
       .join(", ");
     const updateColumns = columns.filter((column) => column !== "id");
     const updateAssignments = updateColumns.map(
-      (column) => `${column} = VALUES(${column})`,
+      (column) =>
+        `${this.escapeName(column)} = VALUES(${this.escapeName(column)})`,
     );
-    updateAssignments.push("id = LAST_INSERT_ID(id)");
+    updateAssignments.push(
+      `${this.escapeName("id")} = LAST_INSERT_ID(${this.escapeName("id")})`,
+    );
     const updateClause = updateAssignments.join(", ");
-    return `INSERT INTO ${tableName} (${columns.join(", ")}) VALUES (${placeholders}) ON DUPLICATE KEY UPDATE ${updateClause}`;
+    return `INSERT INTO ${this.escapeName(tableName)} (${columns.map((col) => this.escapeName(col)).join(", ")}) VALUES (${placeholders}) ON DUPLICATE KEY UPDATE ${updateClause}`;
   }
 
   getUpdateQuery(
@@ -103,8 +112,10 @@ export class MySqlDriver implements IDatabaseDriver {
     columns: string[],
     conditions: Record<string, unknown>,
   ): string {
-    const setClause = columns.map((col) => `${col} = ?`).join(", ");
-    let query = `UPDATE ${tableName} SET ${setClause}`;
+    const setClause = columns
+      .map((col) => `${this.escapeName(col)} = ?`)
+      .join(", ");
+    let query = `UPDATE ${this.escapeName(tableName)} SET ${setClause}`;
     const whereClause = this.prepareWhereClause(conditions);
     if (whereClause) {
       query += ` WHERE ${whereClause}`;
@@ -118,7 +129,7 @@ export class MySqlDriver implements IDatabaseDriver {
     limit?: number,
     offset?: number,
   ): string {
-    let query = `DELETE FROM ${tableName}`;
+    let query = `DELETE FROM ${this.escapeName(tableName)}`;
     const whereClause = this.prepareWhereClause(conditions);
     if (whereClause) {
       query += ` WHERE ${whereClause}`;
@@ -137,7 +148,7 @@ export class MySqlDriver implements IDatabaseDriver {
     limit?: number,
     offset?: number,
   ): string {
-    let query = `SELECT ${columns.join(", ")} FROM ${tableName}`;
+    let query = `SELECT ${columns.map((col) => (col === "*" ? "*" : this.escapeName(col))).join(", ")} FROM ${this.escapeName(tableName)}`;
     const whereClause = this.prepareWhereClause(conditions);
     if (whereClause) {
       query += ` WHERE ${whereClause}`;
@@ -151,7 +162,7 @@ export class MySqlDriver implements IDatabaseDriver {
     tableName: string,
     conditions?: Record<string, unknown>,
   ): string {
-    let query = `SELECT COUNT(*) AS count FROM ${tableName}`;
+    let query = `SELECT COUNT(*) AS count FROM ${this.escapeName(tableName)}`;
     const whereClause = this.prepareWhereClause(conditions);
     if (whereClause) {
       query += ` WHERE ${whereClause}`;

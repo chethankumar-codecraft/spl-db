@@ -101,6 +101,10 @@ export class PostgreSqlDriver implements IDatabaseDriver {
     };
   }
 
+  escapeName(name: string): string {
+    return `"${name.replace(/"/g, '""')}"`;
+  }
+
   getInsertQuery(tableName: string, columns: string[]): string {
     const placeholders = columns.map((_, i) => `$${i + 1}`).join(", ");
     return `INSERT INTO ${tableName} (${columns.join(", ")}) VALUES (${placeholders}) RETURNING id`;

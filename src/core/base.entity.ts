@@ -104,7 +104,6 @@ export abstract class BaseEntity implements IBaseEntity {
     return await (this as any).findOne({ id });
   }
 
-  // TASKS:
   static async findAll<T extends BaseEntity, I extends IBaseEntity>(
     this: {
       new (entity: I): T;
@@ -177,7 +176,7 @@ export abstract class BaseEntity implements IBaseEntity {
     );
     console.log(query);
     const result = await DB.driver.execute(query, values);
-    return result.affectedRows; //affectedRows in mysql & count in postgresql
+    return result.affectedRows;
   }
 
   static async deleteOne<T extends BaseEntity, I extends IBaseEntity>(
