@@ -1,6 +1,7 @@
 import { DB, type DatabaseDriverResult } from "./db.js";
 import { TABLE_METADATA_KEY } from "./table.decorator.js";
 import { Column, getColumnSqlName } from "./column.decorator.js";
+import { type Condition, type Expression } from "./expressions.js";
 
 export interface IBaseEntity {
   id?: number | undefined;
@@ -34,21 +35,38 @@ export abstract class BaseEntity implements IBaseEntity {
     return Reflect.getMetadata(TABLE_METADATA_KEY, this);
   }
 
+  static transformValue(expr: Expression): unknown {
+    switch (expr.op) {
+      case "contains":
+        return `%${expr.value}%`;
+
+      case "startsWith":
+        return `${expr.value}%`;
+
+      case "endsWith":
+        return `%${expr.value}`;
+
+      default:
+        return expr.value;
+    }
+  }
+
   static buildDbConditions<T extends BaseEntity, I extends IBaseEntity>(
-    this: abstract new (entity: I) => T,
-    conditions?: Record<string, unknown>,
-  ): { dbConditions: Record<string, unknown>; values: unknown[] } {
-    const dbConditions: Record<string, unknown> = {};
+    this: new (entity: I) => T,
+    conditions?: Condition,
+  ): { dbConditions: Condition; values: unknown[] } {
+    const dbConditions: Condition = {};
     const values: unknown[] = [];
     const proto = this.prototype as object;
     const entries = Object.entries(conditions || {});
-    for (const [key, value] of entries) {
+    for (const [key, expr] of entries) {
       const meta = getColumnSqlName(proto, key);
+
       if (!meta.dbColumnName) {
         throw new Error(`Unknown column: ${key}`);
       }
-      dbConditions[meta.dbColumnName] = value;
-      values.push(value);
+      dbConditions[meta.dbColumnName] = expr;
+      values.push(BaseEntity.transformValue(expr));
     }
     return { dbConditions: dbConditions, values: values };
   }
@@ -72,13 +90,18 @@ export abstract class BaseEntity implements IBaseEntity {
       }
       return acc;
     }, {});
-    const { dbConditions } = BaseEntity.buildDbConditions(persistableValues);
-    const columns = Object.keys(dbConditions);
-    if (columns.length === 0) {
-      throw new Error("Cannot save entity without any mapped columns");
+    const dbValues: Record<string, unknown> = {};
+
+    for (const [key, value] of Object.entries(persistableValues)) {
+      const meta = getColumnSqlName(proto, key);
+      if (!meta.dbColumnName) {
+        throw new Error(`Unknown column: ${key}`);
+      }
+      dbValues[meta.dbColumnName] = value;
     }
 
-    const values = Object.values(dbConditions);
+    const columns = Object.keys(dbValues);
+    const values = Object.values(dbValues);
     const query = DB.driver.getUpsertQuery(tableName, columns, ["id"]);
     const result = await DB.driver.execute(query, values);
     const resolvedId = BaseEntity.resolveNumericId(
@@ -87,13 +110,11 @@ export abstract class BaseEntity implements IBaseEntity {
     if (resolvedId !== undefined) {
       this.id = resolvedId;
     }
-
     const returnedRow = result.rows[0];
     if (returnedRow) {
       this.hydrateFromRow(proto, returnedRow);
       return;
     }
-
     await this.reloadCurrentState(tableName, proto);
   }
 
@@ -101,20 +122,22 @@ export abstract class BaseEntity implements IBaseEntity {
     this: new (entity: I) => T,
     id: number,
   ): Promise<T | null> {
-    return await (this as any).findOne({ id });
+    return await (this as any).findOne({
+      id: { op: "equal", value: id },
+    });
   }
 
   static async findAll<T extends BaseEntity, I extends IBaseEntity>(
     this: {
       new (entity: I): T;
       getTableName(): string;
-      buildDbConditions(conditions?: Record<string, unknown>): {
-        dbConditions: Record<string, unknown>;
+      buildDbConditions(conditions?: Condition): {
+        dbConditions: Condition;
         values: unknown[];
       };
     },
     options?: {
-      conditions?: Record<string, unknown>;
+      conditions?: Condition;
       limit?: number;
       offset?: number;
     },
@@ -131,11 +154,15 @@ export abstract class BaseEntity implements IBaseEntity {
     );
     console.log(query);
     const result = await DB.driver.execute(query, values);
-    return result.rows.map((row) => new this(row as I));
+    return result.rows.map((row) => {
+      const entity = new this({} as I);
+      entity.hydrateFromRow(this.prototype, row);
+      return entity;
+    });
   }
   static async findOne<T extends BaseEntity, I extends IBaseEntity>(
     this: { new (entity: I): T; getTableName(): string },
-    conditions: Record<string, unknown>,
+    conditions: Condition,
   ): Promise<T | null> {
     const results = await (this as any).findAll({
       conditions: conditions,
@@ -148,19 +175,21 @@ export abstract class BaseEntity implements IBaseEntity {
     this: new (entity: I) => T,
     id: number,
   ): Promise<boolean> {
-    return await (this as any).deleteOne({ id });
+    return await (this as any).deleteOne({
+      id: { op: "equal", value: id },
+    });
   }
   static async deleteAll<T extends BaseEntity, I extends IBaseEntity>(
     this: {
       new (entity: I): T;
       getTableName(): string;
-      buildDbConditions(conditions?: Record<string, unknown>): {
-        dbConditions: Record<string, unknown>;
+      buildDbConditions(conditions?: Condition): {
+        dbConditions: Condition;
         values: unknown[];
       };
     },
     options?: {
-      conditions?: Record<string, unknown>;
+      conditions?: Condition;
       limit?: number;
       offset?: number;
     },
@@ -181,7 +210,7 @@ export abstract class BaseEntity implements IBaseEntity {
 
   static async deleteOne<T extends BaseEntity, I extends IBaseEntity>(
     this: new (entity: I) => T,
-    conditions: Record<string, unknown>,
+    conditions: Condition,
   ): Promise<boolean> {
     const affectedRows = await (this as any).deleteAll({
       conditions,
@@ -194,12 +223,12 @@ export abstract class BaseEntity implements IBaseEntity {
     this: {
       new (entity: I): T;
       getTableName(): string;
-      buildDbConditions(conditions?: Record<string, unknown>): {
-        dbConditions: Record<string, unknown>;
+      buildDbConditions(conditions?: Condition): {
+        dbConditions: Condition;
         values: unknown[];
       };
     },
-    conditions?: Record<string, unknown>,
+    conditions?: Condition,
   ): Promise<number> {
     const { dbConditions, values } = this.buildDbConditions(conditions);
     const query = DB.driver.getCountQuery(this.getTableName(), dbConditions);
@@ -211,13 +240,13 @@ export abstract class BaseEntity implements IBaseEntity {
     this: {
       new (entity: I): T;
       getTableName(): string;
-      buildDbConditions(conditions?: Record<string, unknown>): {
-        dbConditions: Record<string, unknown>;
+      buildDbConditions(conditions?: Condition): {
+        dbConditions: Condition;
         values: unknown[];
       };
     },
     updates: Record<string, unknown>,
-    conditions: Record<string, unknown>,
+    conditions: Condition,
   ): Promise<number> {
     const proto = this.prototype as object;
     const dbUpdatesColumns: string[] = [];
@@ -250,7 +279,9 @@ export abstract class BaseEntity implements IBaseEntity {
     id: number,
     updates: Record<string, unknown>,
   ): Promise<boolean> {
-    const affectedRows = await (this as any).updateAll(updates, { id });
+    const affectedRows = await (this as any).updateAll(updates, {
+      id: { op: "equal", value: id },
+    });
     return affectedRows > 0;
   }
   private async reloadCurrentState(
@@ -265,7 +296,9 @@ export abstract class BaseEntity implements IBaseEntity {
     const query = DB.driver.getSelectQuery(
       tableName,
       ["*"],
-      { id: entityId },
+      {
+        id: { op: "equal", value: entityId },
+      },
       1,
     );
     const result = await DB.driver.execute(query);
@@ -305,7 +338,6 @@ export abstract class BaseEntity implements IBaseEntity {
       },
       {},
     );
-
     for (const [columnName, value] of Object.entries(row)) {
       const propertyName = propertyToColumn[columnName] ?? columnName;
       if (propertyName in this) {

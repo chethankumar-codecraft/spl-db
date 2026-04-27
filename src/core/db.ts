@@ -1,3 +1,4 @@
+import { type Condition } from "./expressions.js";
 export interface DatabaseDriverResult {
   rows: Record<string, unknown>[];
   affectedRows: number;
@@ -19,24 +20,24 @@ export interface IDatabaseDriver {
   getUpdateQuery(
     tableName: string,
     columns: string[],
-    conditions: Record<string, unknown>,
+    conditions: Condition,
   ): string;
   getDeleteQuery(
     tableName: string,
-    conditions: Record<string, unknown>,
+    conditions: Condition,
     limit?: number,
     offset?: number,
   ): string;
   getSelectQuery(
     tableName: string,
     columns: string[],
-    conditions?: Record<string, unknown>,
+    conditions?: Condition,
     limit?: number,
     offset?: number,
   ): string;
   getCountQuery(
     tableName: string,
-    conditions?: Record<string, unknown>,
+    conditions?: Condition,
   ): string;
 }
 

@@ -1,6 +1,7 @@
 import type { ConnectionOptions } from "mysql2";
 import type { IDatabaseDriver, DatabaseDriverResult } from "../core/db.js";
 import { createConnection, Connection } from "mysql2/promise";
+import { type Condition } from "../core/expressions.js";
 
 export class MySqlDriver implements IDatabaseDriver {
   private connection: Connection | null = null;
@@ -69,15 +70,44 @@ export class MySqlDriver implements IDatabaseDriver {
     return `\`${name.replace(/`/g, "``")}\``;
   }
 
-  private prepareWhereClause(conditions?: Record<string, unknown>): string {
+  private prepareWhereClause(conditions?: Condition): string {
     if (!conditions || Object.keys(conditions).length === 0) {
       return "";
     }
-    const entries = Object.entries(conditions);
-    const predicates = entries.map(
-      ([column]) => `${this.escapeName(column)} = ?`,
-    );
-    return `${predicates.join(" AND ")}`;
+
+    const predicates = Object.entries(conditions).map(([column, expr]) => {
+      const col = this.escapeName(column);
+
+      switch (expr.op) {
+        case "equal":
+          return `${col} = ?`;
+
+        case "notEqual":
+          return `${col} != ?`;
+
+        case "greaterThan":
+          return `${col} > ?`;
+
+        case "lessThan":
+          return `${col} < ?`;
+
+        case "greaterThanOrEqual":
+          return `${col} >= ?`;
+
+        case "lessThanOrEqual":
+          return `${col} <= ?`;
+
+        case "startsWith":
+        case "endsWith":
+        case "contains":
+          return `${col} LIKE ?`;
+
+        default:
+          throw new Error("Unsupported operator");
+      }
+    });
+
+    return predicates.join(" AND ");
   }
 
   getInsertQuery(tableName: string, columns: string[]): string {
@@ -110,7 +140,7 @@ export class MySqlDriver implements IDatabaseDriver {
   getUpdateQuery(
     tableName: string,
     columns: string[],
-    conditions: Record<string, unknown>,
+    conditions: Condition,
   ): string {
     const setClause = columns
       .map((col) => `${this.escapeName(col)} = ?`)
@@ -125,7 +155,7 @@ export class MySqlDriver implements IDatabaseDriver {
 
   getDeleteQuery(
     tableName: string,
-    conditions: Record<string, unknown>,
+    conditions: Condition,
     limit?: number,
     offset?: number,
   ): string {
@@ -144,7 +174,7 @@ export class MySqlDriver implements IDatabaseDriver {
   getSelectQuery(
     tableName: string,
     columns: string[],
-    conditions?: Record<string, unknown>,
+    conditions?: Condition,
     limit?: number,
     offset?: number,
   ): string {
@@ -158,10 +188,7 @@ export class MySqlDriver implements IDatabaseDriver {
     return query;
   }
 
-  getCountQuery(
-    tableName: string,
-    conditions?: Record<string, unknown>,
-  ): string {
+  getCountQuery(tableName: string, conditions?: Condition): string {
     let query = `SELECT COUNT(*) AS count FROM ${this.escapeName(tableName)}`;
     const whereClause = this.prepareWhereClause(conditions);
     if (whereClause) {

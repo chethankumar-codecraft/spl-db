@@ -2,6 +2,7 @@ import type { IDatabaseDriver } from "../core/db.js";
 import type { DatabaseDriverResult } from "../core/db.js";
 import type { ClientConfig } from "pg";
 import { Client } from "pg";
+import { type Condition } from "../core/expressions.js";
 
 export class PostgreSqlDriver implements IDatabaseDriver {
   private client: Client | null = null;
@@ -64,7 +65,7 @@ export class PostgreSqlDriver implements IDatabaseDriver {
   }
 
   prepareWhereClause(
-    conditions?: Record<string, unknown>,
+    conditions?: Condition,
     startIndex: number = 1,
   ): { clause: string; nextIndex: number } {
     if (!conditions || Object.keys(conditions).length === 0) {
@@ -73,11 +74,42 @@ export class PostgreSqlDriver implements IDatabaseDriver {
         nextIndex: startIndex,
       };
     }
-    const whereClause = Object.keys(conditions)
-      .map((key) => `${key} = ${this.getNumberedPlaceholder(startIndex++)}`)
-      .join(" AND ");
+
+    const predicates = Object.entries(conditions).map(([column, expr]) => {
+      const col = this.escapeName(column);
+      const placeholder = this.getNumberedPlaceholder(startIndex++);
+
+      switch (expr.op) {
+        case "equal":
+          return `${col} = ${placeholder}`;
+
+        case "notEqual":
+          return `${col} != ${placeholder}`;
+
+        case "greaterThan":
+          return `${col} > ${placeholder}`;
+
+        case "lessThan":
+          return `${col} < ${placeholder}`;
+
+        case "greaterThanOrEqual":
+          return `${col} >= ${placeholder}`;
+
+        case "lessThanOrEqual":
+          return `${col} <= ${placeholder}`;
+
+        case "contains":
+        case "startsWith":
+        case "endsWith":
+          return `${col} LIKE ${placeholder}`;
+
+        default:
+          throw new Error("Unsupported operator");
+      }
+    });
+
     return {
-      clause: whereClause,
+      clause: predicates.join(" AND "),
       nextIndex: startIndex,
     };
   }
@@ -93,7 +125,10 @@ export class PostgreSqlDriver implements IDatabaseDriver {
       };
     }
     const setClause = columns
-      .map((col) => `${col} = ${this.getNumberedPlaceholder(startIndex++)}`)
+      .map(
+        (col) =>
+          `${this.escapeName(col)} = ${this.getNumberedPlaceholder(startIndex++)}`,
+      )
       .join(", ");
     return {
       clause: setClause,
@@ -107,7 +142,7 @@ export class PostgreSqlDriver implements IDatabaseDriver {
 
   getInsertQuery(tableName: string, columns: string[]): string {
     const placeholders = columns.map((_, i) => `$${i + 1}`).join(", ");
-    return `INSERT INTO ${tableName} (${columns.join(", ")}) VALUES (${placeholders}) RETURNING id`;
+    return `INSERT INTO ${this.escapeName(tableName)} (${columns.map((col) => this.escapeName(col)).join(", ")}) VALUES (${placeholders}) RETURNING id`;
   }
 
   getUpsertQuery(
@@ -121,35 +156,41 @@ export class PostgreSqlDriver implements IDatabaseDriver {
     const updateColumns = columns.filter(
       (column) => !conflictColumns.includes(column),
     );
-    const conflictClause = conflictColumns.join(", ");
+    const conflictClause = conflictColumns
+      .map((col) => this.escapeName(col))
+      .join(", ");
     const updateClause =
       updateColumns.length > 0
-        ? `DO UPDATE SET ${updateColumns.map((column) => `${column} = EXCLUDED.${column}`).join(", ")}`
+        ? `DO UPDATE SET ${updateColumns.map((column) => `${this.escapeName(column)} = EXCLUDED.${this.escapeName(column)}`).join(", ")}`
         : "DO NOTHING"; //EXCLUDE: new insert values that failed because of conflict so it not give error
-    return `INSERT INTO ${tableName} (${columns.join(", ")}) VALUES (${placeholders}) ON CONFLICT (${conflictClause}) ${updateClause} RETURNING *`;
+    return `INSERT INTO ${this.escapeName(tableName)} (${columns.map((col) => this.escapeName(col)).join(", ")}) VALUES (${placeholders}) ON CONFLICT (${conflictClause}) ${updateClause} RETURNING *`;
   }
 
   getUpdateQuery(
     tableName: string,
     columns: string[],
-    conditions: Record<string, unknown>,
+    conditions: Condition,
   ): string {
     const setClause = this.prepareSetClause(columns, 1);
     const whereClause = this.prepareWhereClause(
       conditions,
       setClause.nextIndex,
     );
-    return `UPDATE ${tableName} SET ${setClause.clause} WHERE ${whereClause.clause}`;
+    let query = `UPDATE ${this.escapeName(tableName)} SET ${setClause.clause}`;
+    if (whereClause.clause) {
+      query += ` WHERE ${whereClause.clause}`;
+    }
+    return query;
   }
 
   getDeleteQuery(
     tableName: string,
-    conditions?: Record<string, unknown>,
+    conditions?: Condition,
     limit?: number,
     offset?: number,
   ): string {
     const whereClause = this.prepareWhereClause(conditions, 1);
-    let innerQuery = `SELECT id FROM ${tableName}`;
+    let innerQuery = `SELECT id FROM ${this.escapeName(tableName)}`;
     if (whereClause.clause) {
       innerQuery += ` WHERE ${whereClause.clause}`;
     }
@@ -161,7 +202,7 @@ export class PostgreSqlDriver implements IDatabaseDriver {
       innerQuery += ` OFFSET ${offset}`;
     }
     return `
-    DELETE FROM ${tableName}
+    DELETE FROM ${this.escapeName(tableName)}
     WHERE id IN (${innerQuery})
   `;
   }
@@ -169,12 +210,12 @@ export class PostgreSqlDriver implements IDatabaseDriver {
   getSelectQuery(
     tableName: string,
     columns: string[],
-    conditions?: Record<string, unknown>,
+    conditions?: Condition,
     limit?: number,
     offset?: number,
   ): string {
     const whereClause = this.prepareWhereClause(conditions, 1);
-    let query = `SELECT ${columns.join(", ")} FROM ${tableName}`;
+    let query = `SELECT ${columns.map((c) => (c === "*" ? "*" : this.escapeName(c))).join(", ")} FROM ${this.escapeName(tableName)}`;
     if (whereClause.clause) {
       query += ` WHERE ${whereClause.clause}`;
     }
@@ -187,12 +228,9 @@ export class PostgreSqlDriver implements IDatabaseDriver {
     return query;
   }
 
-  getCountQuery(
-    tableName: string,
-    conditions?: Record<string, unknown>,
-  ): string {
+  getCountQuery(tableName: string, conditions?: Condition): string {
     const whereClause = this.prepareWhereClause(conditions, 1);
-    let query = `SELECT COUNT(*) AS count FROM ${tableName}`;
+    let query = `SELECT COUNT(*) AS count FROM ${this.escapeName(tableName)}`;
     if (whereClause.clause) {
       query += ` WHERE ${whereClause.clause}`;
     }
