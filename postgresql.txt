@@ -1,0 +1,30 @@
+
+## table users
+
+CREATE TABLE users (
+  id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  name TEXT NOT NULL,
+  address TEXT NOT NULL,
+  dob DATE NOT NULL,
+  email TEXT UNIQUE NOT NULL,
+  created_at TIMESTAMP NOT NULL,
+  created_by INTEGER NOT NULL,
+  updated_at TIMESTAMP NOT NULL,
+  updated_by INTEGER NOT NULL
+);
+
+# delete /restart
+TRUNCATE TABLE users RESTART IDENTITY CASCADE;
+
+## table employee
+CREATE TABLE employees (
+  id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  name TEXT NOT NULL,
+  position TEXT NOT NULL,
+  department TEXT NOT NULL,
+  salary NUMERIC(12,2) NOT NULL,
+  created_at TIMESTAMP NOT NULL,
+  created_by INTEGER NOT NULL,
+  updated_at TIMESTAMP NOT NULL,
+  updated_by INTEGER NOT NULL
+);
